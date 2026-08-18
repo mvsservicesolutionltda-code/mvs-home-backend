@@ -8,12 +8,19 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 
+// 🔥 FORÇAR IPv4 (CORRIGE O ERRO ENETUNREACH)
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first');
+
 const app = express();
 const port = process.env.PORT || 8080;
 
 // Configurar banco de dados
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
 });
 
 // Configurar upload de fotos
@@ -177,6 +184,87 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// ==================== RECUPERAR SENHA ====================
+
+// RECUPERAR SENHA - SOLICITAR LINK
+app.post('/api/recuperar-senha', async (req, res) => {
+  try {
+    const { email } = req.body;
+    console.log('📤 Recuperação de senha para:', email);
+
+    // Verificar se o usuário existe
+    const resultado = await pool.query('SELECT * FROM usuarios WHERE email = $1', [email]);
+    
+    if (resultado.rows.length === 0) {
+      console.log('⚠️ Usuário não encontrado:', email);
+      return res.status(404).json({ erro: 'E-mail não encontrado' });
+    }
+
+    // Gerar token único para redefinição
+    const token = jwt.sign(
+      { email: email },
+      process.env.JWT_SECRET || 'mvs_home_secret_2024',
+      { expiresIn: '1h' }
+    );
+
+    console.log('✅ Token gerado para recuperação:', token);
+
+    // 🔥 EM PRODUÇÃO, ENVIE UM EMAIL COM O LINK
+    // Por enquanto, retornamos o link para teste
+    res.json({
+      mensagem: 'Link de recuperação enviado para o seu email',
+      token: token,
+      link: `https://mvs-home-backend.onrender.com/api/redefinir-senha?token=${token}`
+    });
+
+  } catch (erro) {
+    console.error('❌ Erro na recuperação:', erro);
+    res.status(500).json({ erro: erro.message });
+  }
+});
+
+// REDEFINIR SENHA
+app.post('/api/redefinir-senha', async (req, res) => {
+  try {
+    const { token, nova_senha } = req.body;
+    console.log('📤 Redefinindo senha com token:', token);
+
+    // Verificar token
+    let email;
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'mvs_home_secret_2024');
+      email = decoded.email;
+    } catch (err) {
+      console.log('⚠️ Token inválido ou expirado');
+      return res.status(400).json({ erro: 'Token inválido ou expirado' });
+    }
+
+    // Criptografar nova senha
+    const salt = await bcrypt.genSalt(10);
+    const senhaHash = await bcrypt.hash(nova_senha, salt);
+
+    // Atualizar senha no banco
+    const resultado = await pool.query(
+      'UPDATE usuarios SET senha = $1 WHERE email = $2 RETURNING id, nome, email',
+      [senhaHash, email]
+    );
+
+    if (resultado.rows.length === 0) {
+      return res.status(404).json({ erro: 'Usuário não encontrado' });
+    }
+
+    console.log('✅ Senha redefinida com sucesso para:', email);
+    res.json({
+      mensagem: 'Senha redefinida com sucesso!',
+      usuario: resultado.rows[0]
+    });
+
+  } catch (erro) {
+    console.error('❌ Erro ao redefinir senha:', erro);
+    res.status(500).json({ erro: erro.message });
+  }
+});
+
 // ==================== ROTAS DE PEDIDOS ====================
 
 // CRIAR PEDIDO (com foto)
@@ -291,5 +379,4 @@ app.put('/api/orders/:id/aprovar', async (req, res) => {
 app.listen(port, '0.0.0.0', () => {
   console.log(`🚀 Servidor rodando em http://localhost:${port}`);
   console.log(`📋 Teste: http://localhost:${port}`);
-  console.log(`📋 IP: http://192.168.0.139:${port}`);
 });
