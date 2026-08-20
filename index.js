@@ -296,11 +296,27 @@ app.get('/api/orders/all', async (req, res) => {
   }
 });
 
+// ==================== ENVIAR ORÇAMENTO (CORRIGIDO) ====================
+
 // ENVIAR ORÇAMENTO (Admin)
 app.put('/api/orders/:id/orcamento', async (req, res) => {
   try {
     const { id } = req.params;
     const { valor, descricao, tecnico_nome, tecnico_telefone, data_servico, horario_servico } = req.body;
+
+    // Validar campos obrigatórios
+    if (!valor || !descricao) {
+      return res.status(400).json({ erro: 'Valor e descrição são obrigatórios' });
+    }
+
+    console.log('📤 Enviando orçamento para pedido:', id);
+    console.log('📤 Dados:', { valor, descricao, tecnico_nome, tecnico_telefone, data_servico, horario_servico });
+
+    // Verificar se o pedido existe
+    const pedidoExiste = await pool.query('SELECT * FROM pedidos WHERE id = $1', [id]);
+    if (pedidoExiste.rows.length === 0) {
+      return res.status(404).json({ erro: 'Pedido não encontrado' });
+    }
 
     const resultado = await pool.query(
       `UPDATE pedidos 
@@ -309,18 +325,20 @@ app.put('/api/orders/:id/orcamento', async (req, res) => {
            tecnico_nome = $3, tecnico_telefone = $4,
            data_servico = $5, horario_servico = $6
        WHERE id = $7 RETURNING *`,
-      [valor, descricao, tecnico_nome, tecnico_telefone, data_servico, horario_servico, id]
+      [valor, descricao, tecnico_nome || null, tecnico_telefone || null, data_servico || null, horario_servico || null, id]
     );
 
     if (resultado.rows.length === 0) {
       return res.status(404).json({ erro: 'Pedido não encontrado' });
     }
 
+    console.log('✅ Orçamento enviado com sucesso!', resultado.rows[0]);
     res.json({
       mensagem: 'Orçamento enviado com sucesso!',
       pedido: resultado.rows[0]
     });
   } catch (erro) {
+    console.error('❌ Erro ao enviar orçamento:', erro);
     res.status(500).json({ erro: erro.message });
   }
 });
@@ -350,8 +368,6 @@ app.put('/api/orders/:id/aprovar', async (req, res) => {
     res.status(500).json({ erro: erro.message });
   }
 });
-
-// ==================== NOVAS ROTAS ====================
 
 // INICIAR SERVIÇO (Cliente confirma que o técnico começou)
 app.put('/api/orders/:id/iniciar', async (req, res) => {
@@ -436,11 +452,16 @@ app.delete('/api/orders/:id', async (req, res) => {
   }
 });
 
-// GERAR RELATÓRIO PDF (versão com dados JSON)
+// ==================== GERAR RELATÓRIO PDF ====================
+
 app.post('/api/relatorio-pdf', async (req, res) => {
   try {
     const { pedidos } = req.body;
     
+    if (!pedidos || pedidos.length === 0) {
+      return res.status(400).json({ erro: 'Nenhum pedido para gerar relatório' });
+    }
+
     // Criar HTML do relatório
     let html = `
       <!DOCTYPE html>
@@ -459,7 +480,7 @@ app.post('/api/relatorio-pdf', async (req, res) => {
           .status { font-weight: bold; }
           .total { margin-top: 20px; text-align: right; font-size: 18px; }
           .footer { margin-top: 30px; text-align: center; color: #999; font-size: 12px; }
-          .feedback { font-style: italic; color: #555; }
+          .estrelas { color: #f39c12; }
         </style>
       </head>
       <body>
@@ -467,6 +488,7 @@ app.post('/api/relatorio-pdf', async (req, res) => {
           <h1>🏠 MVS HOME</h1>
           <h2>Relatório de Pedidos</h2>
           <p>Gerado em: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')}</p>
+          <p><strong>Total de Pedidos: ${pedidos.length}</strong></p>
         </div>
         <table>
           <thead>
@@ -487,16 +509,17 @@ app.post('/api/relatorio-pdf', async (req, res) => {
     pedidos.forEach(p => {
       const estrelas = p.avaliacao ? '⭐'.repeat(p.avaliacao) : '-';
       const feedback = p.comentario || '-';
+      const valor = p.orcamento_valor ? `R$ ${parseFloat(p.orcamento_valor).toFixed(2)}` : '-';
       html += `
         <tr>
           <td>#${p.id}</td>
-          <td>${p.usuario_nome}</td>
-          <td>${p.servico}</td>
-          <td>${p.descricao}</td>
-          <td>${p.orcamento_valor ? `R$ ${parseFloat(p.orcamento_valor).toFixed(2)}` : '-'}</td>
-          <td><span class="status">${p.status}</span></td>
-          <td>${estrelas}</td>
-          <td class="feedback">${feedback}</td>
+          <td>${p.usuario_nome || 'N/A'}</td>
+          <td>${p.servico || 'N/A'}</td>
+          <td>${p.descricao || 'N/A'}</td>
+          <td>${valor}</td>
+          <td><span class="status">${p.status || 'N/A'}</span></td>
+          <td class="estrelas">${estrelas}</td>
+          <td>${feedback}</td>
         </tr>
       `;
     });
@@ -514,12 +537,10 @@ app.post('/api/relatorio-pdf', async (req, res) => {
       </html>
     `;
 
-    // Retornar JSON com o HTML (para o frontend gerar o PDF)
     res.json({
       mensagem: 'Relatório gerado com sucesso!',
       total: pedidos.length,
-      html: html,
-      dados: pedidos
+      html: html
     });
     
   } catch (erro) {
