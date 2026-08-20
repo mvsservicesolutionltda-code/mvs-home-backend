@@ -8,7 +8,7 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 
-// 🔥 FORÇAR IPv4 (CORRIGE O ERRO ENETUNREACH)
+// 🔥 FORÇAR IPv4
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 
@@ -72,28 +72,23 @@ app.post('/api/register', async (req, res) => {
     const { nome, cpf, data_nascimento, email, senha, endereco_completo } = req.body;
     console.log('📥 3. Dados extraídos:', { nome, cpf, email });
 
-    // Validar campos obrigatórios
     if (!nome || !cpf || !data_nascimento || !email || !senha || !endereco_completo) {
       console.log('⚠️ Campos faltando!');
       return res.status(400).json({ erro: 'Todos os campos são obrigatórios' });
     }
 
     console.log('🔍 4. Verificando se usuário já existe...');
-    console.log('🔍 4.1. Conectando ao banco...');
     
     try {
-      console.log('🔍 4.2. Executando query...');
       const existe = await pool.query('SELECT * FROM usuarios WHERE email = $1 OR cpf = $2', [email, cpf]);
-      console.log('🔍 5. Resultado da verificação:', existe.rows.length > 0 ? 'Usuário existe' : 'Usuário não existe');
+      console.log('🔍 5. Resultado:', existe.rows.length > 0 ? 'Usuário existe' : 'Usuário não existe');
       
       if (existe.rows.length > 0) {
         console.log('⚠️ 6. Usuário já existe!');
         return res.status(400).json({ erro: 'E-mail ou CPF já cadastrado' });
       }
     } catch (dbErro) {
-      console.error('❌ ERRO NO BANCO DE DADOS:', dbErro);
-      console.error('❌ Mensagem:', dbErro.message);
-      console.error('❌ Stack:', dbErro.stack);
+      console.error('❌ ERRO NO BANCO:', dbErro);
       return res.status(500).json({ erro: 'Erro no banco de dados: ' + dbErro.message });
     }
 
@@ -102,22 +97,20 @@ app.post('/api/register', async (req, res) => {
     const senhaHash = await bcrypt.hash(senha, salt);
     console.log('🔐 8. Senha criptografada com sucesso');
 
-    console.log('💾 9. Salvando no banco de dados...');
+    console.log('💾 9. Salvando no banco...');
     const resultado = await pool.query(
       `INSERT INTO usuarios (nome, cpf, data_nascimento, email, senha, endereco_completo) 
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, nome, email`,
       [nome, cpf, data_nascimento, email, senhaHash, endereco_completo]
     );
     
-    console.log('✅ 10. Usuário cadastrado com sucesso:', resultado.rows[0]);
+    console.log('✅ 10. Usuário cadastrado:', resultado.rows[0]);
     res.status(201).json({ 
       mensagem: 'Usuário cadastrado com sucesso',
       usuario: resultado.rows[0]
     });
   } catch (erro) {
     console.error('❌ ERRO GERAL:', erro);
-    console.error('❌ Mensagem:', erro.message);
-    console.error('❌ Stack:', erro.stack);
     res.status(500).json({ erro: erro.message });
   }
 });
@@ -128,9 +121,7 @@ app.post('/api/login', async (req, res) => {
     console.log('📥 Recebendo login:', req.body);
     const { email, senha } = req.body;
 
-    // Validar campos
     if (!email || !senha) {
-      console.log('⚠️ Email ou senha não fornecidos');
       return res.status(400).json({ erro: 'Email e senha são obrigatórios' });
     }
 
@@ -139,15 +130,12 @@ app.post('/api/login', async (req, res) => {
     console.log('🔍 Usuário encontrado:', resultado.rows.length > 0);
 
     if (resultado.rows.length === 0) {
-      console.log('⚠️ Usuário não encontrado:', email);
       return res.status(401).json({ erro: 'E-mail ou senha inválidos' });
     }
 
     const usuario = resultado.rows[0];
     
-    // Verificar se a coluna 'senha' existe
     if (!usuario.senha) {
-      console.log('⚠️ Usuário sem senha cadastrada');
       return res.status(500).json({ erro: 'Erro interno: usuário sem senha' });
     }
 
@@ -155,7 +143,6 @@ app.post('/api/login', async (req, res) => {
     console.log('🔐 Senha válida:', senhaValida);
 
     if (!senhaValida) {
-      console.log('⚠️ Senha inválida para:', email);
       return res.status(401).json({ erro: 'E-mail ou senha inválidos' });
     }
 
@@ -178,39 +165,31 @@ app.post('/api/login', async (req, res) => {
     });
   } catch (erro) {
     console.error('❌ Erro no login:', erro);
-    console.error('❌ Mensagem:', erro.message);
-    console.error('❌ Stack:', erro.stack);
     res.status(500).json({ erro: erro.message });
   }
 });
 
 // ==================== RECUPERAR SENHA ====================
 
-// RECUPERAR SENHA - SOLICITAR LINK
 app.post('/api/recuperar-senha', async (req, res) => {
   try {
     const { email } = req.body;
     console.log('📤 Recuperação de senha para:', email);
 
-    // Verificar se o usuário existe
     const resultado = await pool.query('SELECT * FROM usuarios WHERE email = $1', [email]);
     
     if (resultado.rows.length === 0) {
-      console.log('⚠️ Usuário não encontrado:', email);
       return res.status(404).json({ erro: 'E-mail não encontrado' });
     }
 
-    // Gerar token único para redefinição
     const token = jwt.sign(
       { email: email },
       process.env.JWT_SECRET || 'mvs_home_secret_2024',
       { expiresIn: '1h' }
     );
 
-    console.log('✅ Token gerado para recuperação:', token);
+    console.log('✅ Token gerado:', token);
 
-    // 🔥 EM PRODUÇÃO, ENVIE UM EMAIL COM O LINK
-    // Por enquanto, retornamos o link para teste
     res.json({
       mensagem: 'Link de recuperação enviado para o seu email',
       token: token,
@@ -223,27 +202,22 @@ app.post('/api/recuperar-senha', async (req, res) => {
   }
 });
 
-// REDEFINIR SENHA
 app.post('/api/redefinir-senha', async (req, res) => {
   try {
     const { token, nova_senha } = req.body;
     console.log('📤 Redefinindo senha com token:', token);
 
-    // Verificar token
     let email;
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET || 'mvs_home_secret_2024');
       email = decoded.email;
     } catch (err) {
-      console.log('⚠️ Token inválido ou expirado');
       return res.status(400).json({ erro: 'Token inválido ou expirado' });
     }
 
-    // Criptografar nova senha
     const salt = await bcrypt.genSalt(10);
     const senhaHash = await bcrypt.hash(nova_senha, salt);
 
-    // Atualizar senha no banco
     const resultado = await pool.query(
       'UPDATE usuarios SET senha = $1 WHERE email = $2 RETURNING id, nome, email',
       [senhaHash, email]
@@ -253,7 +227,7 @@ app.post('/api/redefinir-senha', async (req, res) => {
       return res.status(404).json({ erro: 'Usuário não encontrado' });
     }
 
-    console.log('✅ Senha redefinida com sucesso para:', email);
+    console.log('✅ Senha redefinida para:', email);
     res.json({
       mensagem: 'Senha redefinida com sucesso!',
       usuario: resultado.rows[0]
@@ -307,7 +281,7 @@ app.get('/api/orders/usuario/:usuario_id', async (req, res) => {
   }
 });
 
-// LISTAR TODOS OS PEDIDOS (Para o Admin)
+// LISTAR TODOS OS PEDIDOS (Admin)
 app.get('/api/orders/all', async (req, res) => {
   try {
     const resultado = await pool.query(
@@ -326,13 +300,16 @@ app.get('/api/orders/all', async (req, res) => {
 app.put('/api/orders/:id/orcamento', async (req, res) => {
   try {
     const { id } = req.params;
-    const { valor, descricao } = req.body;
+    const { valor, descricao, tecnico_nome, tecnico_telefone, data_servico, horario_servico } = req.body;
 
     const resultado = await pool.query(
       `UPDATE pedidos 
-       SET orcamento_valor = $1, orcamento_descricao = $2, status = 'orcamento_enviado'
-       WHERE id = $3 RETURNING *`,
-      [valor, descricao, id]
+       SET orcamento_valor = $1, orcamento_descricao = $2, 
+           status = 'orcamento_enviado',
+           tecnico_nome = $3, tecnico_telefone = $4,
+           data_servico = $5, horario_servico = $6
+       WHERE id = $7 RETURNING *`,
+      [valor, descricao, tecnico_nome, tecnico_telefone, data_servico, horario_servico, id]
     );
 
     if (resultado.rows.length === 0) {
@@ -367,6 +344,71 @@ app.put('/api/orders/:id/aprovar', async (req, res) => {
 
     res.json({
       mensagem: aprovado ? 'Orçamento aprovado!' : 'Orçamento recusado.',
+      pedido: resultado.rows[0]
+    });
+  } catch (erro) {
+    res.status(500).json({ erro: erro.message });
+  }
+});
+
+// ==================== NOVAS ROTAS ====================
+
+// INICIAR SERVIÇO (Cliente confirma que o técnico começou)
+app.put('/api/orders/:id/iniciar', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const resultado = await pool.query(
+      'UPDATE pedidos SET status = $1 WHERE id = $2 RETURNING *',
+      ['em_andamento', id]
+    );
+    if (resultado.rows.length === 0) {
+      return res.status(404).json({ erro: 'Pedido não encontrado' });
+    }
+    res.json({
+      mensagem: 'Serviço iniciado! O técnico está a caminho.',
+      pedido: resultado.rows[0]
+    });
+  } catch (erro) {
+    res.status(500).json({ erro: erro.message });
+  }
+});
+
+// FINALIZAR SERVIÇO (Cliente avalia o serviço)
+app.put('/api/orders/:id/finalizar', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { avaliacao, comentario } = req.body;
+    const resultado = await pool.query(
+      `UPDATE pedidos 
+       SET status = 'finalizado', avaliacao = $1, comentario = $2 
+       WHERE id = $3 RETURNING *`,
+      [avaliacao, comentario, id]
+    );
+    if (resultado.rows.length === 0) {
+      return res.status(404).json({ erro: 'Pedido não encontrado' });
+    }
+    res.json({
+      mensagem: 'Serviço finalizado com sucesso! Obrigado pela avaliação.',
+      pedido: resultado.rows[0]
+    });
+  } catch (erro) {
+    res.status(500).json({ erro: erro.message });
+  }
+});
+
+// EXCLUIR PEDIDO (Admin)
+app.delete('/api/orders/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const resultado = await pool.query(
+      'DELETE FROM pedidos WHERE id = $1 RETURNING *',
+      [id]
+    );
+    if (resultado.rows.length === 0) {
+      return res.status(404).json({ erro: 'Pedido não encontrado' });
+    }
+    res.json({
+      mensagem: 'Pedido excluído com sucesso!',
       pedido: resultado.rows[0]
     });
   } catch (erro) {
