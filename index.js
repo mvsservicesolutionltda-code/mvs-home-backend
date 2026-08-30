@@ -8,28 +8,21 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 
-// 🔥 FORÇAR IPv4
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 const port = process.env.PORT || 8080;
 
-// Configurar banco de dados
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
+  ssl: { rejectUnauthorized: false },
 });
 
-// Configurar upload de fotos
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const dir = './uploads';
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir);
-    }
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
     cb(null, dir);
   },
   filename: (req, file, cb) => {
@@ -43,128 +36,64 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowed = ['image/jpeg', 'image/png', 'image/jpg'];
-    if (allowed.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Apenas imagens JPG, JPEG e PNG são permitidas'));
-    }
+    allowed.includes(file.mimetype) ? cb(null, true) : cb(new Error('Apenas imagens JPG, JPEG e PNG'));
   }
 });
 
-// Middlewares
 app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
-// ==================== ROTA DE TESTE ====================
+// ROTA DE TESTE
 app.get('/', (req, res) => {
   res.json({ mensagem: '✅ MVS HOME API funcionando!' });
 });
 
 // ==================== ROTAS DE USUÁRIO ====================
 
-// CADASTRO
 app.post('/api/register', async (req, res) => {
   try {
-    console.log('📥 1. Recebendo requisição');
-    console.log('📥 2. Body:', req.body);
-    
     const { nome, cpf, data_nascimento, email, senha, endereco_completo } = req.body;
-    console.log('📥 3. Dados extraídos:', { nome, cpf, email });
-
     if (!nome || !cpf || !data_nascimento || !email || !senha || !endereco_completo) {
-      console.log('⚠️ Campos faltando!');
       return res.status(400).json({ erro: 'Todos os campos são obrigatórios' });
     }
-
-    console.log('🔍 4. Verificando se usuário já existe...');
-    
-    try {
-      const existe = await pool.query('SELECT * FROM usuarios WHERE email = $1 OR cpf = $2', [email, cpf]);
-      console.log('🔍 5. Resultado:', existe.rows.length > 0 ? 'Usuário existe' : 'Usuário não existe');
-      
-      if (existe.rows.length > 0) {
-        console.log('⚠️ 6. Usuário já existe!');
-        return res.status(400).json({ erro: 'E-mail ou CPF já cadastrado' });
-      }
-    } catch (dbErro) {
-      console.error('❌ ERRO NO BANCO:', dbErro);
-      return res.status(500).json({ erro: 'Erro no banco de dados: ' + dbErro.message });
+    const existe = await pool.query('SELECT * FROM usuarios WHERE email = $1 OR cpf = $2', [email, cpf]);
+    if (existe.rows.length > 0) {
+      return res.status(400).json({ erro: 'E-mail ou CPF já cadastrado' });
     }
-
-    console.log('🔐 7. Criptografando senha...');
     const salt = await bcrypt.genSalt(10);
     const senhaHash = await bcrypt.hash(senha, salt);
-    console.log('🔐 8. Senha criptografada com sucesso');
-
-    console.log('💾 9. Salvando no banco...');
     const resultado = await pool.query(
       `INSERT INTO usuarios (nome, cpf, data_nascimento, email, senha, endereco_completo) 
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, nome, email`,
       [nome, cpf, data_nascimento, email, senhaHash, endereco_completo]
     );
-    
-    console.log('✅ 10. Usuário cadastrado:', resultado.rows[0]);
-    res.status(201).json({ 
-      mensagem: 'Usuário cadastrado com sucesso',
-      usuario: resultado.rows[0]
-    });
+    res.status(201).json({ mensagem: 'Usuário cadastrado com sucesso', usuario: resultado.rows[0] });
   } catch (erro) {
-    console.error('❌ ERRO GERAL:', erro);
     res.status(500).json({ erro: erro.message });
   }
 });
 
-// LOGIN
 app.post('/api/login', async (req, res) => {
   try {
-    console.log('📥 Recebendo login:', req.body);
     const { email, senha } = req.body;
-
-    if (!email || !senha) {
-      return res.status(400).json({ erro: 'Email e senha são obrigatórios' });
-    }
-
-    console.log('🔍 Buscando usuário:', email);
+    if (!email || !senha) return res.status(400).json({ erro: 'Email e senha são obrigatórios' });
     const resultado = await pool.query('SELECT * FROM usuarios WHERE email = $1', [email]);
-    console.log('🔍 Usuário encontrado:', resultado.rows.length > 0);
-
-    if (resultado.rows.length === 0) {
-      return res.status(401).json({ erro: 'E-mail ou senha inválidos' });
-    }
-
+    if (resultado.rows.length === 0) return res.status(401).json({ erro: 'E-mail ou senha inválidos' });
     const usuario = resultado.rows[0];
-    
-    if (!usuario.senha) {
-      return res.status(500).json({ erro: 'Erro interno: usuário sem senha' });
-    }
-
     const senhaValida = await bcrypt.compare(senha, usuario.senha);
-    console.log('🔐 Senha válida:', senhaValida);
-
-    if (!senhaValida) {
-      return res.status(401).json({ erro: 'E-mail ou senha inválidos' });
-    }
-
+    if (!senhaValida) return res.status(401).json({ erro: 'E-mail ou senha inválidos' });
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, nome: usuario.nome },
       process.env.JWT_SECRET || 'mvs_home_secret_2024',
       { expiresIn: '7d' }
     );
-
-    console.log('✅ Login realizado:', email);
     res.json({
       mensagem: 'Login realizado com sucesso',
       token,
-      usuario: {
-        id: usuario.id,
-        nome: usuario.nome,
-        email: usuario.email,
-        endereco: usuario.endereco_completo
-      }
+      usuario: { id: usuario.id, nome: usuario.nome, email: usuario.email, endereco: usuario.endereco_completo }
     });
   } catch (erro) {
-    console.error('❌ Erro no login:', erro);
     res.status(500).json({ erro: erro.message });
   }
 });
@@ -174,30 +103,15 @@ app.post('/api/login', async (req, res) => {
 app.post('/api/recuperar-senha', async (req, res) => {
   try {
     const { email } = req.body;
-    console.log('📤 Recuperação de senha para:', email);
-
     const resultado = await pool.query('SELECT * FROM usuarios WHERE email = $1', [email]);
-    
-    if (resultado.rows.length === 0) {
-      return res.status(404).json({ erro: 'E-mail não encontrado' });
-    }
-
-    const token = jwt.sign(
-      { email: email },
-      process.env.JWT_SECRET || 'mvs_home_secret_2024',
-      { expiresIn: '1h' }
-    );
-
-    console.log('✅ Token gerado:', token);
-
+    if (resultado.rows.length === 0) return res.status(404).json({ erro: 'E-mail não encontrado' });
+    const token = jwt.sign({ email }, process.env.JWT_SECRET || 'mvs_home_secret_2024', { expiresIn: '1h' });
     res.json({
       mensagem: 'Link de recuperação enviado para o seu email',
-      token: token,
+      token,
       link: `https://mvs-home-backend.onrender.com/api/redefinir-senha?token=${token}`
     });
-
   } catch (erro) {
-    console.error('❌ Erro na recuperação:', erro);
     res.status(500).json({ erro: erro.message });
   }
 });
@@ -205,58 +119,40 @@ app.post('/api/recuperar-senha', async (req, res) => {
 app.post('/api/redefinir-senha', async (req, res) => {
   try {
     const { token, nova_senha } = req.body;
-    console.log('📤 Redefinindo senha com token:', token);
-
     let email;
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET || 'mvs_home_secret_2024');
       email = decoded.email;
-    } catch (err) {
+    } catch {
       return res.status(400).json({ erro: 'Token inválido ou expirado' });
     }
-
     const salt = await bcrypt.genSalt(10);
     const senhaHash = await bcrypt.hash(nova_senha, salt);
-
     const resultado = await pool.query(
       'UPDATE usuarios SET senha = $1 WHERE email = $2 RETURNING id, nome, email',
       [senhaHash, email]
     );
-
-    if (resultado.rows.length === 0) {
-      return res.status(404).json({ erro: 'Usuário não encontrado' });
-    }
-
-    console.log('✅ Senha redefinida para:', email);
-    res.json({
-      mensagem: 'Senha redefinida com sucesso!',
-      usuario: resultado.rows[0]
-    });
-
+    if (resultado.rows.length === 0) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    res.json({ mensagem: 'Senha redefinida com sucesso!', usuario: resultado.rows[0] });
   } catch (erro) {
-    console.error('❌ Erro ao redefinir senha:', erro);
     res.status(500).json({ erro: erro.message });
   }
 });
 
 // ==================== ROTAS DE PEDIDOS ====================
 
-// CRIAR PEDIDO (com foto)
+// CRIAR PEDIDO (COM MATERIAL)
 app.post('/api/orders', upload.single('foto'), async (req, res) => {
   try {
-    console.log('📥 Criando pedido:', req.body);
-    console.log('📥 Arquivo:', req.file);
-
-    const { usuario_id, servico, descricao, endereco_reparo } = req.body;
+    const { usuario_id, servico, descricao, endereco_reparo, material } = req.body;
     const foto_url = req.file ? `/uploads/${req.file.filename}` : null;
-
+    
     const resultado = await pool.query(
-      `INSERT INTO pedidos (usuario_id, servico, descricao, foto_url, endereco_reparo, status) 
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [usuario_id, servico, descricao, foto_url, endereco_reparo, 'aguardando_orcamento']
+      `INSERT INTO pedidos (usuario_id, servico, descricao, foto_url, endereco_reparo, material, status) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [usuario_id, servico, descricao, foto_url, endereco_reparo, material || 'cliente_nao_informou', 'aguardando_orcamento']
     );
-
-    console.log('✅ Pedido criado:', resultado.rows[0]);
+    
     res.status(201).json({
       mensagem: 'Pedido criado com sucesso! Aguardando orçamento.',
       pedido: resultado.rows[0]
@@ -267,7 +163,6 @@ app.post('/api/orders', upload.single('foto'), async (req, res) => {
   }
 });
 
-// LISTAR PEDIDOS DE UM USUÁRIO
 app.get('/api/orders/usuario/:usuario_id', async (req, res) => {
   try {
     const { usuario_id } = req.params;
@@ -281,7 +176,6 @@ app.get('/api/orders/usuario/:usuario_id', async (req, res) => {
   }
 });
 
-// LISTAR TODOS OS PEDIDOS (Admin)
 app.get('/api/orders/all', async (req, res) => {
   try {
     const resultado = await pool.query(
@@ -296,28 +190,17 @@ app.get('/api/orders/all', async (req, res) => {
   }
 });
 
-// ==================== ENVIAR ORÇAMENTO (CORRIGIDO) ====================
+// ==================== ORÇAMENTO ====================
 
-// ENVIAR ORÇAMENTO (Admin)
 app.put('/api/orders/:id/orcamento', async (req, res) => {
   try {
     const { id } = req.params;
     const { valor, descricao, tecnico_nome, tecnico_telefone, data_servico, horario_servico } = req.body;
-
-    // Validar campos obrigatórios
     if (!valor || !descricao) {
       return res.status(400).json({ erro: 'Valor e descrição são obrigatórios' });
     }
-
-    console.log('📤 Enviando orçamento para pedido:', id);
-    console.log('📤 Dados:', { valor, descricao, tecnico_nome, tecnico_telefone, data_servico, horario_servico });
-
-    // Verificar se o pedido existe
     const pedidoExiste = await pool.query('SELECT * FROM pedidos WHERE id = $1', [id]);
-    if (pedidoExiste.rows.length === 0) {
-      return res.status(404).json({ erro: 'Pedido não encontrado' });
-    }
-
+    if (pedidoExiste.rows.length === 0) return res.status(404).json({ erro: 'Pedido não encontrado' });
     const resultado = await pool.query(
       `UPDATE pedidos 
        SET orcamento_valor = $1, orcamento_descricao = $2, 
@@ -327,49 +210,27 @@ app.put('/api/orders/:id/orcamento', async (req, res) => {
        WHERE id = $7 RETURNING *`,
       [valor, descricao, tecnico_nome || null, tecnico_telefone || null, data_servico || null, horario_servico || null, id]
     );
-
-    if (resultado.rows.length === 0) {
-      return res.status(404).json({ erro: 'Pedido não encontrado' });
-    }
-
-    console.log('✅ Orçamento enviado com sucesso!', resultado.rows[0]);
-    res.json({
-      mensagem: 'Orçamento enviado com sucesso!',
-      pedido: resultado.rows[0]
-    });
+    res.json({ mensagem: 'Orçamento enviado com sucesso!', pedido: resultado.rows[0] });
   } catch (erro) {
-    console.error('❌ Erro ao enviar orçamento:', erro);
     res.status(500).json({ erro: erro.message });
   }
 });
 
-// APROVAR ORÇAMENTO (Cliente)
 app.put('/api/orders/:id/aprovar', async (req, res) => {
   try {
     const { id } = req.params;
     const { aprovado } = req.body;
-
     const resultado = await pool.query(
-      `UPDATE pedidos 
-       SET orcamento_aprovado = $1, status = $2
-       WHERE id = $3 RETURNING *`,
+      `UPDATE pedidos SET orcamento_aprovado = $1, status = $2 WHERE id = $3 RETURNING *`,
       [aprovado, aprovado ? 'aprovado' : 'recusado', id]
     );
-
-    if (resultado.rows.length === 0) {
-      return res.status(404).json({ erro: 'Pedido não encontrado' });
-    }
-
-    res.json({
-      mensagem: aprovado ? 'Orçamento aprovado!' : 'Orçamento recusado.',
-      pedido: resultado.rows[0]
-    });
+    if (resultado.rows.length === 0) return res.status(404).json({ erro: 'Pedido não encontrado' });
+    res.json({ mensagem: aprovado ? 'Orçamento aprovado!' : 'Orçamento recusado.', pedido: resultado.rows[0] });
   } catch (erro) {
     res.status(500).json({ erro: erro.message });
   }
 });
 
-// INICIAR SERVIÇO (Cliente confirma que o técnico começou)
 app.put('/api/orders/:id/iniciar', async (req, res) => {
   try {
     const { id } = req.params;
@@ -377,42 +238,28 @@ app.put('/api/orders/:id/iniciar', async (req, res) => {
       'UPDATE pedidos SET status = $1 WHERE id = $2 RETURNING *',
       ['em_andamento', id]
     );
-    if (resultado.rows.length === 0) {
-      return res.status(404).json({ erro: 'Pedido não encontrado' });
-    }
-    res.json({
-      mensagem: 'Serviço iniciado! O técnico está a caminho.',
-      pedido: resultado.rows[0]
-    });
+    if (resultado.rows.length === 0) return res.status(404).json({ erro: 'Pedido não encontrado' });
+    res.json({ mensagem: 'Serviço iniciado!', pedido: resultado.rows[0] });
   } catch (erro) {
     res.status(500).json({ erro: erro.message });
   }
 });
 
-// FINALIZAR SERVIÇO (Cliente avalia o serviço)
 app.put('/api/orders/:id/finalizar', async (req, res) => {
   try {
     const { id } = req.params;
     const { avaliacao, comentario } = req.body;
     const resultado = await pool.query(
-      `UPDATE pedidos 
-       SET status = 'finalizado', avaliacao = $1, comentario = $2 
-       WHERE id = $3 RETURNING *`,
+      `UPDATE pedidos SET status = 'finalizado', avaliacao = $1, comentario = $2 WHERE id = $3 RETURNING *`,
       [avaliacao, comentario, id]
     );
-    if (resultado.rows.length === 0) {
-      return res.status(404).json({ erro: 'Pedido não encontrado' });
-    }
-    res.json({
-      mensagem: 'Serviço finalizado com sucesso! Obrigado pela avaliação.',
-      pedido: resultado.rows[0]
-    });
+    if (resultado.rows.length === 0) return res.status(404).json({ erro: 'Pedido não encontrado' });
+    res.json({ mensagem: 'Serviço finalizado!', pedido: resultado.rows[0] });
   } catch (erro) {
     res.status(500).json({ erro: erro.message });
   }
 });
 
-// ARQUIVAR PEDIDO (Admin)
 app.put('/api/orders/:id/arquivar', async (req, res) => {
   try {
     const { id } = req.params;
@@ -420,138 +267,51 @@ app.put('/api/orders/:id/arquivar', async (req, res) => {
       'UPDATE pedidos SET status = $1 WHERE id = $2 RETURNING *',
       ['arquivado', id]
     );
-    if (resultado.rows.length === 0) {
-      return res.status(404).json({ erro: 'Pedido não encontrado' });
-    }
-    res.json({
-      mensagem: 'Pedido arquivado com sucesso!',
-      pedido: resultado.rows[0]
-    });
+    if (resultado.rows.length === 0) return res.status(404).json({ erro: 'Pedido não encontrado' });
+    res.json({ mensagem: 'Pedido arquivado!', pedido: resultado.rows[0] });
   } catch (erro) {
     res.status(500).json({ erro: erro.message });
   }
 });
 
-// EXCLUIR PEDIDO (Admin)
 app.delete('/api/orders/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const resultado = await pool.query(
-      'DELETE FROM pedidos WHERE id = $1 RETURNING *',
-      [id]
-    );
-    if (resultado.rows.length === 0) {
-      return res.status(404).json({ erro: 'Pedido não encontrado' });
-    }
-    res.json({
-      mensagem: 'Pedido excluído com sucesso!',
-      pedido: resultado.rows[0]
-    });
+    const resultado = await pool.query('DELETE FROM pedidos WHERE id = $1 RETURNING *', [id]);
+    if (resultado.rows.length === 0) return res.status(404).json({ erro: 'Pedido não encontrado' });
+    res.json({ mensagem: 'Pedido excluído!', pedido: resultado.rows[0] });
   } catch (erro) {
     res.status(500).json({ erro: erro.message });
   }
 });
 
-// ==================== GERAR RELATÓRIO PDF ====================
+// ==================== RELATÓRIO PDF ====================
 
 app.post('/api/relatorio-pdf', async (req, res) => {
   try {
     const { pedidos } = req.body;
-    
     if (!pedidos || pedidos.length === 0) {
-      return res.status(400).json({ erro: 'Nenhum pedido para gerar relatório' });
+      return res.status(400).json({ erro: 'Nenhum pedido' });
     }
-
-    // Criar HTML do relatório
-    let html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <title>Relatório de Pedidos - MVS HOME</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          h1 { color: #1A3B5D; text-align: center; }
-          .header { text-align: center; margin-bottom: 30px; }
-          .header h2 { color: #E67E22; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-          th { background: #1A3B5D; color: white; padding: 10px; text-align: left; }
-          td { padding: 8px; border: 1px solid #ddd; }
-          .status { font-weight: bold; }
-          .total { margin-top: 20px; text-align: right; font-size: 18px; }
-          .footer { margin-top: 30px; text-align: center; color: #999; font-size: 12px; }
-          .estrelas { color: #f39c12; }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h1>🏠 MVS HOME</h1>
-          <h2>Relatório de Pedidos</h2>
-          <p>Gerado em: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')}</p>
-          <p><strong>Total de Pedidos: ${pedidos.length}</strong></p>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Cliente</th>
-              <th>Serviço</th>
-              <th>Descrição</th>
-              <th>Valor</th>
-              <th>Status</th>
-              <th>Avaliação</th>
-              <th>Feedback</th>
-            </tr>
-          </thead>
-          <tbody>
-    `;
-
+    let html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Relatório</title>
+      <style>body{font-family:Arial;padding:20px}h1{color:#1A3B5D}
+      table{width:100%;border-collapse:collapse;margin-top:20px}
+      th{background:#1A3B5D;color:white;padding:10px;text-align:left}
+      td{padding:8px;border:1px solid #ddd}</style></head><body>
+      <h1>🏠 MVS HOME</h1><h2>Relatório de Pedidos</h2>
+      <p>Gerado em: ${new Date().toLocaleDateString('pt-BR')}</p>
+      <table><thead><tr><th>ID</th><th>Cliente</th><th>Serviço</th><th>Valor</th><th>Status</th></tr></thead><tbody>`;
     pedidos.forEach(p => {
-      const estrelas = p.avaliacao ? '⭐'.repeat(p.avaliacao) : '-';
-      const feedback = p.comentario || '-';
       const valor = p.orcamento_valor ? `R$ ${parseFloat(p.orcamento_valor).toFixed(2)}` : '-';
-      html += `
-        <tr>
-          <td>#${p.id}</td>
-          <td>${p.usuario_nome || 'N/A'}</td>
-          <td>${p.servico || 'N/A'}</td>
-          <td>${p.descricao || 'N/A'}</td>
-          <td>${valor}</td>
-          <td><span class="status">${p.status || 'N/A'}</span></td>
-          <td class="estrelas">${estrelas}</td>
-          <td>${feedback}</td>
-        </tr>
-      `;
+      html += `<tr><td>#${p.id}</td><td>${p.usuario_nome}</td><td>${p.servico}</td><td>${valor}</td><td>${p.status}</td></tr>`;
     });
-
-    html += `
-          </tbody>
-        </table>
-        <div class="total">
-          <strong>Total de Pedidos: ${pedidos.length}</strong>
-        </div>
-        <div class="footer">
-          <p>Relatório gerado automaticamente pelo sistema MVS HOME</p>
-        </div>
-      </body>
-      </html>
-    `;
-
-    res.json({
-      mensagem: 'Relatório gerado com sucesso!',
-      total: pedidos.length,
-      html: html
-    });
-    
+    html += `</tbody></table><p><strong>Total: ${pedidos.length}</strong></p></body></html>`;
+    res.json({ mensagem: 'Relatório gerado!', total: pedidos.length, html });
   } catch (erro) {
-    console.error('❌ Erro ao gerar relatório:', erro);
     res.status(500).json({ erro: erro.message });
   }
 });
 
-// ==================== INICIAR SERVIDOR ====================
-
 app.listen(port, '0.0.0.0', () => {
   console.log(`🚀 Servidor rodando em http://localhost:${port}`);
-  console.log(`📋 Teste: http://localhost:${port}`);
 });
