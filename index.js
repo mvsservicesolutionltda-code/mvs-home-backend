@@ -44,16 +44,15 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
-// ROTA DE TESTE
+// ========== ROTA DE TESTE ==========
 app.get('/', (req, res) => {
   res.json({ mensagem: '✅ MVS HOME API funcionando!' });
 });
 
-// ==================== ROTAS DE USUÁRIO ====================
-
+// ========== ROTAS DE USUÁRIO ==========
 app.post('/api/register', async (req, res) => {
   try {
-    const { nome, cpf, data_nascimento, email, senha, endereco_completo } = req.body;
+    const { nome, cpf, data_nascimento, email, senha, endereco_completo, telefone } = req.body;
     if (!nome || !cpf || !data_nascimento || !email || !senha || !endereco_completo) {
       return res.status(400).json({ erro: 'Todos os campos são obrigatórios' });
     }
@@ -64,9 +63,9 @@ app.post('/api/register', async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const senhaHash = await bcrypt.hash(senha, salt);
     const resultado = await pool.query(
-      `INSERT INTO usuarios (nome, cpf, data_nascimento, email, senha, endereco_completo) 
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, nome, email`,
-      [nome, cpf, data_nascimento, email, senhaHash, endereco_completo]
+      `INSERT INTO usuarios (nome, cpf, data_nascimento, email, senha, endereco_completo, telefone) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, nome, email, cpf, telefone, endereco_completo`,
+      [nome, cpf, data_nascimento, email, senhaHash, endereco_completo, telefone || null]
     );
     res.status(201).json({ mensagem: 'Usuário cadastrado com sucesso', usuario: resultado.rows[0] });
   } catch (erro) {
@@ -91,15 +90,21 @@ app.post('/api/login', async (req, res) => {
     res.json({
       mensagem: 'Login realizado com sucesso',
       token,
-      usuario: { id: usuario.id, nome: usuario.nome, email: usuario.email, endereco: usuario.endereco_completo }
+      usuario: { 
+        id: usuario.id, 
+        nome: usuario.nome, 
+        email: usuario.email, 
+        endereco: usuario.endereco_completo,
+        cpf: usuario.cpf,
+        telefone: usuario.telefone
+      }
     });
   } catch (erro) {
     res.status(500).json({ erro: erro.message });
   }
 });
 
-// ==================== RECUPERAR SENHA ====================
-
+// ========== RECUPERAR SENHA ==========
 app.post('/api/recuperar-senha', async (req, res) => {
   try {
     const { email } = req.body;
@@ -139,9 +144,9 @@ app.post('/api/redefinir-senha', async (req, res) => {
   }
 });
 
-// ==================== ROTAS DE PEDIDOS ====================
+// ========== ROTAS DE PEDIDOS ==========
 
-// CRIAR PEDIDO (COM MATERIAL)
+// CRIAR PEDIDO
 app.post('/api/orders', upload.single('foto'), async (req, res) => {
   try {
     const { usuario_id, servico, descricao, endereco_reparo, material } = req.body;
@@ -154,7 +159,7 @@ app.post('/api/orders', upload.single('foto'), async (req, res) => {
     );
     
     res.status(201).json({
-      mensagem: 'Pedido criado com sucesso! Aguardando orçamento.',
+      mensagem: 'Pedido criado com sucesso!',
       pedido: resultado.rows[0]
     });
   } catch (erro) {
@@ -163,6 +168,7 @@ app.post('/api/orders', upload.single('foto'), async (req, res) => {
   }
 });
 
+// LISTAR PEDIDOS DO USUÁRIO
 app.get('/api/orders/usuario/:usuario_id', async (req, res) => {
   try {
     const { usuario_id } = req.params;
@@ -176,10 +182,11 @@ app.get('/api/orders/usuario/:usuario_id', async (req, res) => {
   }
 });
 
+// LISTAR TODOS OS PEDIDOS (ADMIN)
 app.get('/api/orders/all', async (req, res) => {
   try {
     const resultado = await pool.query(
-      `SELECT p.*, u.nome as usuario_nome, u.email as usuario_email 
+      `SELECT p.*, u.nome as usuario_nome, u.email as usuario_email, u.cpf, u.telefone, u.endereco_completo
        FROM pedidos p 
        JOIN usuarios u ON p.usuario_id = u.id 
        ORDER BY p.created_at DESC`
@@ -190,25 +197,26 @@ app.get('/api/orders/all', async (req, res) => {
   }
 });
 
-// ==================== ORÇAMENTO ====================
-
+// ========== ORÇAMENTO ==========
 app.put('/api/orders/:id/orcamento', async (req, res) => {
   try {
     const { id } = req.params;
-    const { valor, descricao, tecnico_nome, tecnico_telefone, data_servico, horario_servico } = req.body;
+    const { valor, descricao, tecnico_nome, tecnico_telefone, data_servico, horario_servico, materiais } = req.body;
     if (!valor || !descricao) {
       return res.status(400).json({ erro: 'Valor e descrição são obrigatórios' });
     }
     const pedidoExiste = await pool.query('SELECT * FROM pedidos WHERE id = $1', [id]);
     if (pedidoExiste.rows.length === 0) return res.status(404).json({ erro: 'Pedido não encontrado' });
+    
     const resultado = await pool.query(
       `UPDATE pedidos 
        SET orcamento_valor = $1, orcamento_descricao = $2, 
            status = 'orcamento_enviado',
            tecnico_nome = $3, tecnico_telefone = $4,
-           data_servico = $5, horario_servico = $6
-       WHERE id = $7 RETURNING *`,
-      [valor, descricao, tecnico_nome || null, tecnico_telefone || null, data_servico || null, horario_servico || null, id]
+           data_servico = $5, horario_servico = $6,
+           materiais_usados = $7
+       WHERE id = $8 RETURNING *`,
+      [valor, descricao, tecnico_nome || null, tecnico_telefone || null, data_servico || null, horario_servico || null, materiais || [], id]
     );
     res.json({ mensagem: 'Orçamento enviado com sucesso!', pedido: resultado.rows[0] });
   } catch (erro) {
@@ -216,12 +224,13 @@ app.put('/api/orders/:id/orcamento', async (req, res) => {
   }
 });
 
+// APROVAR ORÇAMENTO
 app.put('/api/orders/:id/aprovar', async (req, res) => {
   try {
     const { id } = req.params;
     const { aprovado } = req.body;
     const resultado = await pool.query(
-      `UPDATE pedidos SET orcamento_aprovado = $1, status = $2 WHERE id = $3 RETURNING *`,
+      `UPDATE pedidos SET orcamento_aprovado = $1, status = $2, data_inicio = NOW() WHERE id = $3 RETURNING *`,
       [aprovado, aprovado ? 'aprovado' : 'recusado', id]
     );
     if (resultado.rows.length === 0) return res.status(404).json({ erro: 'Pedido não encontrado' });
@@ -231,12 +240,14 @@ app.put('/api/orders/:id/aprovar', async (req, res) => {
   }
 });
 
+// INICIAR SERVIÇO
 app.put('/api/orders/:id/iniciar', async (req, res) => {
   try {
     const { id } = req.params;
+    const { tecnico_id } = req.body;
     const resultado = await pool.query(
-      'UPDATE pedidos SET status = $1 WHERE id = $2 RETURNING *',
-      ['em_andamento', id]
+      `UPDATE pedidos SET status = 'em_andamento', data_inicio = NOW(), tecnico_id = $1 WHERE id = $2 RETURNING *`,
+      [tecnico_id || null, id]
     );
     if (resultado.rows.length === 0) return res.status(404).json({ erro: 'Pedido não encontrado' });
     res.json({ mensagem: 'Serviço iniciado!', pedido: resultado.rows[0] });
@@ -245,13 +256,21 @@ app.put('/api/orders/:id/iniciar', async (req, res) => {
   }
 });
 
+// FINALIZAR SERVIÇO
 app.put('/api/orders/:id/finalizar', async (req, res) => {
   try {
     const { id } = req.params;
-    const { avaliacao, comentario } = req.body;
+    const { avaliacao, comentario, materiais_usados, valor_total } = req.body;
     const resultado = await pool.query(
-      `UPDATE pedidos SET status = 'finalizado', avaliacao = $1, comentario = $2 WHERE id = $3 RETURNING *`,
-      [avaliacao, comentario, id]
+      `UPDATE pedidos SET 
+        status = 'finalizado', 
+        avaliacao = $1, 
+        comentario = $2,
+        materiais_usados = $3,
+        valor_total = $4,
+        data_fim = NOW()
+       WHERE id = $5 RETURNING *`,
+      [avaliacao, comentario, materiais_usados || [], valor_total || 0, id]
     );
     if (resultado.rows.length === 0) return res.status(404).json({ erro: 'Pedido não encontrado' });
     res.json({ mensagem: 'Serviço finalizado!', pedido: resultado.rows[0] });
@@ -260,6 +279,7 @@ app.put('/api/orders/:id/finalizar', async (req, res) => {
   }
 });
 
+// ARQUIVAR PEDIDO
 app.put('/api/orders/:id/arquivar', async (req, res) => {
   try {
     const { id } = req.params;
@@ -274,6 +294,7 @@ app.put('/api/orders/:id/arquivar', async (req, res) => {
   }
 });
 
+// EXCLUIR PEDIDO
 app.delete('/api/orders/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -285,28 +306,68 @@ app.delete('/api/orders/:id', async (req, res) => {
   }
 });
 
-// ==================== RELATÓRIO PDF ====================
-
-app.post('/api/relatorio-pdf', async (req, res) => {
+// ========== ROTAS DE TÉCNICOS ==========
+app.get('/api/tecnicos', async (req, res) => {
   try {
-    const { pedidos } = req.body;
-    if (!pedidos || pedidos.length === 0) {
-      return res.status(400).json({ erro: 'Nenhum pedido' });
-    }
-    let html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Relatório</title>
-      <style>body{font-family:Arial;padding:20px}h1{color:#1A3B5D}
-      table{width:100%;border-collapse:collapse;margin-top:20px}
-      th{background:#1A3B5D;color:white;padding:10px;text-align:left}
-      td{padding:8px;border:1px solid #ddd}</style></head><body>
-      <h1>🏠 MVS HOME</h1><h2>Relatório de Pedidos</h2>
-      <p>Gerado em: ${new Date().toLocaleDateString('pt-BR')}</p>
-      <table><thead><tr><th>ID</th><th>Cliente</th><th>Serviço</th><th>Valor</th><th>Status</th></tr></thead><tbody>`;
-    pedidos.forEach(p => {
-      const valor = p.orcamento_valor ? `R$ ${parseFloat(p.orcamento_valor).toFixed(2)}` : '-';
-      html += `<tr><td>#${p.id}</td><td>${p.usuario_nome}</td><td>${p.servico}</td><td>${valor}</td><td>${p.status}</td></tr>`;
+    const resultado = await pool.query('SELECT * FROM tecnicos ORDER BY nome');
+    res.json(resultado.rows);
+  } catch (erro) {
+    res.status(500).json({ erro: erro.message });
+  }
+});
+
+app.post('/api/tecnicos', async (req, res) => {
+  try {
+    const { nome, telefone, especialidade } = req.body;
+    const resultado = await pool.query(
+      'INSERT INTO tecnicos (nome, telefone, especialidade) VALUES ($1, $2, $3) RETURNING *',
+      [nome, telefone, especialidade]
+    );
+    res.status(201).json({ mensagem: 'Técnico cadastrado!', tecnico: resultado.rows[0] });
+  } catch (erro) {
+    res.status(500).json({ erro: erro.message });
+  }
+});
+
+// ========== ROTAS DE MATERIAIS ==========
+app.get('/api/materiais', async (req, res) => {
+  try {
+    const resultado = await pool.query('SELECT * FROM materiais ORDER BY nome');
+    res.json(resultado.rows);
+  } catch (erro) {
+    res.status(500).json({ erro: erro.message });
+  }
+});
+
+app.post('/api/materiais', async (req, res) => {
+  try {
+    const { nome, descricao, preco_unitario } = req.body;
+    const resultado = await pool.query(
+      'INSERT INTO materiais (nome, descricao, preco_unitario) VALUES ($1, $2, $3) RETURNING *',
+      [nome, descricao, preco_unitario || 0]
+    );
+    res.status(201).json({ mensagem: 'Material cadastrado!', material: resultado.rows[0] });
+  } catch (erro) {
+    res.status(500).json({ erro: erro.message });
+  }
+});
+
+// ========== ROTAS DE ESTATÍSTICAS ==========
+app.get('/api/dashboard/stats', async (req, res) => {
+  try {
+    const totalPedidos = await pool.query('SELECT COUNT(*) FROM pedidos');
+    const pendentes = await pool.query("SELECT COUNT(*) FROM pedidos WHERE status = 'aguardando_orcamento'");
+    const emAndamento = await pool.query("SELECT COUNT(*) FROM pedidos WHERE status = 'em_andamento'");
+    const finalizados = await pool.query("SELECT COUNT(*) FROM pedidos WHERE status = 'finalizado'");
+    const valorTotal = await pool.query("SELECT SUM(orcamento_valor) FROM pedidos WHERE status = 'finalizado' OR status = 'em_andamento'");
+    
+    res.json({
+      total: parseInt(totalPedidos.rows[0].count),
+      pendentes: parseInt(pendentes.rows[0].count),
+      emAndamento: parseInt(emAndamento.rows[0].count),
+      finalizados: parseInt(finalizados.rows[0].count),
+      valorTotal: parseFloat(valorTotal.rows[0].sum) || 0
     });
-    html += `</tbody></table><p><strong>Total: ${pedidos.length}</strong></p></body></html>`;
-    res.json({ mensagem: 'Relatório gerado!', total: pedidos.length, html });
   } catch (erro) {
     res.status(500).json({ erro: erro.message });
   }
