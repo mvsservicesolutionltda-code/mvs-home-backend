@@ -376,3 +376,42 @@ app.get('/api/dashboard/stats', async (req, res) => {
 app.listen(port, '0.0.0.0', () => {
   console.log(`🚀 Servidor rodando em http://localhost:${port}`);
 });
+// ========== ROTAS DE TÉCNICOS ==========
+app.get('/api/tecnicos', async (req, res) => {
+  try {
+    const resultado = await pool.query('SELECT * FROM tecnicos ORDER BY nome');
+    res.json(resultado.rows);
+  } catch (erro) {
+    res.status(500).json({ erro: erro.message });
+  }
+});
+
+app.post('/api/tecnicos', async (req, res) => {
+  try {
+    const { nome, telefone, especialidade } = req.body;
+    if (!nome || nome.trim() === '') {
+      return res.status(400).json({ erro: 'Nome é obrigatório' });
+    }
+    const resultado = await pool.query(
+      'INSERT INTO tecnicos (nome, telefone, especialidade) VALUES ($1, $2, $3) RETURNING *',
+      [nome.trim(), telefone || null, especialidade || null]
+    );
+    res.status(201).json({ mensagem: 'Técnico cadastrado!', tecnico: resultado.rows[0] });
+  } catch (erro) {
+    console.error('Erro ao cadastrar técnico:', erro);
+    res.status(500).json({ erro: erro.message });
+  }
+});
+
+app.delete('/api/tecnicos/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const resultado = await pool.query('DELETE FROM tecnicos WHERE id = $1 RETURNING *', [id]);
+    if (resultado.rows.length === 0) {
+      return res.status(404).json({ erro: 'Técnico não encontrado' });
+    }
+    res.json({ mensagem: 'Técnico removido!', tecnico: resultado.rows[0] });
+  } catch (erro) {
+    res.status(500).json({ erro: erro.message });
+  }
+});
